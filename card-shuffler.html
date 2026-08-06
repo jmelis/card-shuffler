@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  RADIX SHUFFLE  —  a provably uniform physical card shuffle
+  ============================================================================
+
+  THE IDEA
+  --------
+  Dealing N cards into P piles and re-stacking is one pass of a radix sort.
+  If we sort the cards by a set of *distinct* random keys, the result is an
+  exactly uniform random permutation — not "close to uniform", exactly uniform.
+
+  Concretely:
+    1. Draw a uniform random INJECTION  k : {cards} -> {0, ..., P^M - 1}
+       (i.e. N distinct keys, assigned to cards in a uniformly random way).
+    2. Write each key in base P, giving M digits per card.
+    3. Do M stable deals, least-significant digit first: on pass i, card c
+       goes to pile  floor(k(c) / P^i) mod P.
+    4. After each pass, stack pile 0 on top, then pile 1, ... then pile P-1.
+
+  After M passes the deck is sorted by key. Since the keys are distinct and
+  the key assignment was uniform over injections, sorting by key yields a
+  uniformly random permutation. QED — no mixing-time argument needed.
+
+  WHY IT IS EXACT
+  ---------------
+  Condition on the SET of N key values that got used. Whatever that set is, the
+  N! ways of matching cards to those values are equally likely, and each match
+  produces a different final ordering — a bijection with the N! orderings. So
+  every ordering has probability exactly 1/N!. No mixing-time argument, no
+  "how many passes is enough", no residual correlation with the starting order.
+
+  The key space only has to be big enough to hold N distinct values:
+  P^M >= N, hence M = ceil(log_P N). Two passes at P = 8 for a 52-card deck.
+
+  PRACTICAL REQUIREMENTS
+  ----------------------
+  * Every pile must be treated identically. The app instructs a face-down deal
+    and no flipping, which leaves each pile internally REVERSED — that is still
+    exactly uniform, because it just sorts by a relabelled key (for M = 2 the
+    deck ends sorted by d1*P + (P-1-d0), a bijection on the key space). A
+    face-up deal with every pile flipped is the order-preserving alternative and
+    is equally exact. What breaks it is mixing the two inside one shuffle.
+  * Stack in the fixed pile order shown. Do not improvise.
+  * One misdeal breaks exactness. The per-pile counts are displayed as a
+    checksum if you want one.
+
+  (Footnote for the curious: handing out INDEPENDENT digits instead of distinct
+  keys turns this into an inverse riffle shuffle with parameter a = P, which is
+  only approximately uniform and needs P^M >~ N^(3/2). Distinct keys are both
+  cheaper and exact, so that variant is not implemented here.)
+
+  RANDOMNESS SOURCE
+  -----------------
+  crypto.getRandomValues() with rejection sampling, so the integers are
+  unbiased (Math.random() is neither uniform-modulo-safe nor cryptographic).
+
+  Single file, no dependencies, no network, no storage — safe to host on
+  GitHub Pages or open through htmlpreview.github.io.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Radix Shuffle</title>
+
+<!-- MathJax v3 for the equations in the explanation section. This is the only
+     external resource the page uses; without a network connection everything
+     still works, the formulas just render as raw TeX. Delimiters are \( \) and
+     $$ $$ — a bare $ is NOT a delimiter, so "$5" in prose stays literal. -->
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] },
+    options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] },
+    chtml: { scale: 0.95 }
+  };
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+<style>
+  :root{
+    --bg:#11131a; --panel:#181b24; --panel2:#1f2331; --line:#2c3142;
+    --fg:#e7eaf3; --dim:#8d95ab; --accent:#6ea8fe; --good:#4ade80; --warn:#fbbf24;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:20px 16px calc(40px + env(safe-area-inset-bottom));
+  }
+  .wrap{max-width:820px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 2px}
+  h1 span{color:var(--dim);font-weight:400;font-size:15px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:16px}
+  label{display:block;font-size:13px;color:var(--dim);margin-bottom:6px;letter-spacing:.02em}
+  input,select,button{font:inherit;color:var(--fg);background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  input,select{width:100%}
+  button{cursor:pointer;background:var(--panel2)}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--accent);color:#0b1020;border-color:var(--accent);font-weight:600}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1 1 150px;min-width:0}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .controls button{flex:1 1 90px;min-width:80px}
+
+  /* ---- the big "card N -> pile X" readout ---- */
+  .stage{text-align:center;padding:18px 8px 6px}
+  .cardno{color:var(--dim);font-size:14px;font-variant-numeric:tabular-nums}
+  .pile{font-family:var(--mono);font-size:clamp(72px,26vw,132px);line-height:1.05;
+        font-weight:700;color:var(--accent);letter-spacing:-.03em}
+  .pile.idle{color:var(--dim)}
+  .hint{color:var(--dim);font-size:14px;min-height:1.5em}
+  .bar{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin:14px 0 4px}
+  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .12s linear}
+
+  /* ---- full digit sequence, so you can recover if you lose your place ---- */
+  .seq{display:flex;flex-wrap:wrap;gap:4px;margin-top:14px;
+       max-height:190px;overflow:auto;padding:4px;background:var(--panel2);
+       border:1px solid var(--line);border-radius:10px}
+  .seq b{font-family:var(--mono);font-weight:500;font-size:13px;width:26px;height:26px;
+         display:grid;place-items:center;border-radius:6px;background:#262b3a;color:var(--dim)}
+  .seq b.done{color:var(--fg)}
+  .seq b.now{background:var(--accent);color:#0b1020;font-weight:700}
+
+  /* ---- per-pile checksums ---- */
+  .piles{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .pl{flex:1 1 78px;background:var(--panel2);border:1px solid var(--line);
+      border-radius:10px;padding:8px 10px;text-align:center}
+  .pl .n{font-size:12px;color:var(--dim)}
+  .pl .c{font-family:var(--mono);font-size:19px}
+  .pl.filled{border-color:var(--good)}
+  .pl .c small{color:var(--dim);font-size:13px}
+
+  .stack{background:#20283a;border:1px solid #33507d;border-radius:10px;padding:12px 14px;margin-top:14px}
+  .stack code{font-family:var(--mono);color:var(--accent)}
+  .note{color:var(--dim);font-size:13px;margin-top:10px}
+  .kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);
+       border-radius:5px;padding:1px 6px;font-size:12px}
+  details{margin-top:16px;color:var(--dim);font-size:14px}
+  summary{cursor:pointer;color:var(--accent);padding:4px 0}
+  details .panel{background:var(--panel2)}
+
+  /* readable prose inside the instruction / theory panels */
+  .prose{color:#c3c9da;font-size:15px}
+  .prose h4{color:var(--fg);font-size:15px;margin:22px 0 6px;letter-spacing:.01em}
+  .prose h4:first-child{margin-top:0}
+  .prose p{margin:9px 0}
+  .prose ol,.prose ul{margin:9px 0;padding-left:22px}
+  .prose li{margin:7px 0}
+  .prose strong{color:var(--fg)}
+  .prose code{font-family:var(--mono);font-size:13px;background:var(--panel);
+              border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .prose mjx-container[display="true"]{margin:14px 0!important;overflow-x:auto;overflow-y:hidden}
+  .math{font-family:var(--mono);font-size:13px;color:var(--fg);
+        background:var(--panel2);border-radius:8px;padding:10px;overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+  td,th{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left}
+  .ok{color:var(--good)} .bad{color:var(--warn)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Radix Shuffle <span>— exactly uniform in ⌈log<sub>P</sub> N⌉ passes</span></h1>
+
+  <!-- ==================== SETUP ==================== -->
+  <div class="panel" id="setup">
+    <div class="row">
+      <div>
+        <label for="N">Cards (N)</label>
+        <input id="N" type="number" min="2" max="2000" value="52" inputmode="numeric">
+      </div>
+      <div>
+        <label for="P">Piles (P)</label>
+        <select id="P"></select>
+      </div>
+      <div>
+        <label for="speed">Seconds per card</label>
+        <input id="speed" type="number" min="0.1" max="5" step="0.1" value="0.8" inputmode="decimal">
+      </div>
+    </div>
+    <div class="note" id="plan"></div>
+    <div class="controls">
+      <button class="primary" id="start">Start shuffle</button>
+      <label style="flex:1 1 120px;display:flex;align-items:center;gap:8px;margin:0;color:var(--dim)">
+        <input type="checkbox" id="beep" checked style="width:auto"> tick sound
+      </label>
+    </div>
+  </div>
+
+  <!-- ==================== DEALING ==================== -->
+  <div class="panel hidden" id="deal">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <strong id="passLabel"></strong>
+      <span class="cardno" id="counter"></span>
+    </div>
+
+    <div class="stage">
+      <div class="cardno" id="cardno">press Play, then deal from the top</div>
+      <div class="pile idle" id="pileBig">—</div>
+      <div class="hint" id="hint"></div>
+    </div>
+
+    <div class="bar"><i id="prog"></i></div>
+
+    <div class="controls">
+      <button id="play" class="primary">Play</button>
+      <button id="back">◀ Back</button>
+      <button id="step">Step ▶</button>
+      <button id="abort">Restart</button>
+    </div>
+
+    <!-- Live checksum: how many cards belong in each pile vs how many placed -->
+    <div class="piles" id="pileCounts"></div>
+
+    <!-- Whole sequence for this pass, in case you lose your place -->
+    <div class="seq" id="seq"></div>
+
+    <!-- Shown when the pass finishes: how to collect the piles -->
+    <div class="stack hidden" id="stackBox"></div>
+    <div class="controls hidden" id="nextWrap">
+      <button class="primary" id="next">Next pass →</button>
+    </div>
+
+    <div class="note">
+      Deal face&#8209;down. Never flip or reorder a pile.
+      Keys: <span class="kbd">space</span> play/pause · <span class="kbd">→</span> step ·
+      <span class="kbd">←</span> back.
+    </div>
+  </div>
+
+  <!-- ==================== DONE ==================== -->
+  <div class="panel hidden" id="done">
+    <strong style="color:var(--good)">Shuffle complete.</strong>
+    <div class="note">The deck is now an exactly uniform random permutation of its
+      starting order, assuming every deal was stable and every pile was stacked in
+      the stated order.</div>
+    <div class="controls"><button class="primary" id="again">Shuffle again</button></div>
+  </div>
+
+  <!-- ==================== INSTRUCTIONS ==================== -->
+  <details id="howto" open>
+    <summary>How to do it</summary>
+    <div class="panel prose">
+      <p><em>P</em> piles in a row, left to right, same spots every pass.</p>
+      <ol>
+        <li>Deal from the top of the deck, face&#8209;down, one card per number.</li>
+        <li>Stack pile 1 onto 2, that onto 3, and so on rightwards. Pile 1 ends on top.</li>
+        <li><strong>Next pass</strong>, repeat.</li>
+      </ol>
+      <div class="stack">Never flip or reorder a pile, and always stack low to high.
+        Those two rules are the shuffle.</div>
+      <p>Misdeal, dropped card, lost your place? <strong>Restart</strong>.</p>
+    </div>
+  </details>
+
+  <!-- ==================== EXPLANATION + SELF TEST ==================== -->
+  <details id="theory">
+    <summary>Why this works</summary>
+    <div class="panel prose">
+
+      <h4>The idea in one sentence</h4>
+      <p>Give every card a secret random number, then sort the deck by those numbers.
+      If the numbers were handed out at random, the sorted order is random.</p>
+
+      <h4>The keys</h4>
+      <p>Each card gets its own number, its <strong>key</strong>. \(k(c)\) denotes the key of
+      card \(c\): if the third card gets the number 37, then \(k(3) = 37\).</p>
+
+      <p>The keys have two properties:</p>
+      <ul>
+        <li><strong>Distinct</strong> — no two cards get the same number. Such a map is called
+        an <em>injection</em>, or one-to-one.</li>
+        <li><strong>Uniform</strong> — every possible way of handing out distinct numbers is
+        exactly as likely as every other.</li>
+      </ul>
+
+      <p>Together: a <strong>uniform random injection</strong> from cards to keys.</p>
+
+      <h4>Sorting the deck by hand</h4>
+      <p>Sorting 52 cards into numerical order directly would be miserable, so the deck is
+      sorted the way a computer sorts digit strings — a <strong>radix sort</strong>, one digit
+      at a time.</p>
+
+      <p>Write each key in base \(P\), where \(P\) is your number of piles. With \(P = 8\)
+      and two digits, the key 37 is \(45_8\) — digits 5 (units) and 4 (eights). Pass \(i\)
+      sends card \(c\) to the pile given by its \(i\)-th digit:</p>
+
+      $$\text{pile} \;=\; \left\lfloor \frac{k(c)}{P^{\,i}} \right\rfloor \bmod P$$
+
+      <p>starting with \(i = 0\), the <em>last</em> digit, and working up. Each pass sorts the
+      deck by one digit without destroying the previous pass's work: cards sharing the current
+      digit land in the same pile and keep the order they already had, which was sorted by the
+      earlier digits. After \(M\) passes the deck is in full key order.</p>
+
+      <p>Hence the two rules — every pile handled identically, piles collected in fixed
+      ascending order. They <em>are</em> the sort.</p>
+
+      <p>Dealing face&#8209;down leaves each pile internally <em>reversed</em> rather than
+      order-preserving. This is still exact: reversing every pile at every pass sorts the deck
+      by a relabelled key. With \(M = 2\) the final order is sorted by</p>
+
+      $$f(k) \;=\; d_1 \cdot P + (P - 1 - d_0)$$
+
+      <p>where \(d_0, d_1\) are the key's digits. Relabelling is a bijection on the key space,
+      so distinct keys stay distinct and uniform stays uniform. Dealing face&#8209;up and
+      flipping each pile is the order-preserving alternative, equally exact. Mixing the two
+      inside one shuffle is what breaks the guarantee.</p>
+
+      <h4>How many passes</h4>
+      <p>\(M\) digits in base \(P\) express \(P^M\) different keys, and at least \(N\) are
+      needed to give every card a distinct one:</p>
+
+      $$P^M \ge N \qquad\Longrightarrow\qquad M = \left\lceil \log_P N \right\rceil$$
+
+      <p>For a 52-card deck with 8 piles, \(8^2 = 64 \ge 52\), so \(M = 2\). Two passes.</p>
+
+      <h4>Exact uniformity</h4>
+      <p>A shuffle is <strong>fair</strong> if all \(N!\) orderings of the deck are equally
+      likely. For 52 cards:</p>
+
+      $$52! \approx 8.07 \times 10^{67} \text{ orderings, each with probability } \tfrac{1}{52!}$$
+
+      <p>Most real shuffling only gets <em>close</em>, and how close takes a calculation to
+      establish. The standard comparison is the <strong>riffle shuffle</strong>, the casino
+      move where the deck is split in two and the halves interleaved by releasing cards
+      alternately from each thumb. One riffle barely disturbs a deck; around seven are needed
+      for 52 cards, and even then some orderings remain measurably more likely than others.
+      That residue is correlation with the order the deck was already in — precisely what a
+      shuffle exists to destroy.</p>
+
+      <p>The radix method leaves no residue. Fix the <em>set</em> of \(N\) key values that
+      happened to get used. Whatever that set is, the \(N!\) ways of matching cards to those
+      values are equally likely, and each matching sorts into a different final ordering.
+      Matchings therefore correspond one-to-one with orderings, and</p>
+
+      $$\Pr[\text{any particular final order}] = \frac{1}{N!} \quad\text{exactly}$$
+
+      <p>independent of the starting order, with no approximation and no mixing-time argument.
+      The guarantee is conditional only on the deal being executed correctly.</p>
+
+      <h4>Where the randomness comes from</h4>
+      <p>The keys are drawn from your browser's cryptographic generator
+      (<code>crypto.getRandomValues</code>), not <code>Math.random</code>, and converted to a
+      range by rejection sampling so there is no modulo bias. The assignment itself uses a
+      partial Fisher–Yates shuffle, which is uniform over injections by construction.</p>
+
+      <h4>Self test</h4>
+      <p>Runs the app's actual dealing logic on a small deck many times and compares the
+      distribution over all \(N!\) outcomes against uniform with a \(\chi^2\) test, for both
+      the face&#8209;down and face&#8209;up conventions. A correct implementation lands
+      \(\chi^2\) near its degrees of freedom.</p>
+      <div class="controls"><button id="selftest">Run χ² self test</button></div>
+      <div id="testOut"></div>
+    </div>
+  </details>
+
+</div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   1. UNBIASED RANDOMNESS
+   ------------------------------------------------------------------------
+   Math.random() is not cryptographic and "% n" on any generator introduces
+   modulo bias. We pull 32-bit words from the CSPRNG and reject the tail of
+   the range that would not divide evenly, which makes the result exactly
+   uniform on {0, ..., m-1}.
+   ========================================================================= */
+const _buf = new Uint32Array(1);
+function randInt(m){
+  if (m <= 0 || m > 4294967296) throw new RangeError("randInt range");
+  const limit = Math.floor(4294967296 / m) * m;   // largest multiple of m that fits
+  let x;
+  do { crypto.getRandomValues(_buf); x = _buf[0]; } while (x >= limit);
+  return x % m;
+}
+
+/* =========================================================================
+   2. UNIFORM RANDOM INJECTION  cards -> {0, ..., R-1}
+   ------------------------------------------------------------------------
+   A partial Fisher-Yates over a *virtual* array [0..R-1]: we only remember
+   the entries we actually touched, in a Map. This produces an ordered sample
+   without replacement of size N, uniformly over all such samples — which is
+   precisely a uniform random injection. O(N) time and memory even if R is
+   large.
+   ========================================================================= */
+function distinctKeys(N, R){
+  const moved = new Map();               // virtual array: index -> value, default v[i] = i
+  const get = i => moved.has(i) ? moved.get(i) : i;
+  const out = new Array(N);
+  for (let i = 0; i < N; i++){
+    const j = i + randInt(R - i);        // uniform in [i, R)
+    out[i] = get(j);
+    moved.set(j, get(i));                // swap
+  }
+  return out;
+}
+
+/* =========================================================================
+   3. SHUFFLE PLAN
+   ------------------------------------------------------------------------
+   M = ceil(log_P N), computed with integer arithmetic to avoid floating
+   point edge cases (e.g. log(1000)/log(10) landing at 2.9999999996).
+   ========================================================================= */
+function passesFor(N, P){
+  let M = 1, pow = P;
+  while (pow < N){ pow *= P; M++; if (M > 40) break; }
+  return M;
+}
+function digitOf(key, pass, P){          // the pass-th base-P digit (pass 0 = LSD)
+  return Math.floor(key / Math.pow(P, pass)) % P;
+}
+
+/* =========================================================================
+   4. APP STATE
+   ========================================================================= */
+const S = {
+  N:0, P:0, M:0, R:0,
+  keys:[],        // keys[c] for card id c
+  order:[],       // card ids, top of deck first, in the CURRENT physical order
+  digits:[],      // pile digit for each position in `order`, this pass
+  pass:0,         // 0-based pass index
+  pos:0,          // how many cards of this pass have been dealt
+  timer:null,
+  playing:false
+};
+
+const $ = id => document.getElementById(id);
+
+/* ---- a short WebAudio tick so you can watch the cards, not the screen ---- */
+let actx = null;
+function tick(){
+  if (!$("beep").checked) return;
+  try{
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = 880; o.type = "triangle";
+    g.gain.setValueAtTime(0.12, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.06);
+    o.connect(g).connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + 0.07);
+  }catch(e){ /* audio is a nicety; never let it break the deal */ }
+}
+
+/* =========================================================================
+   5. SETUP UI — offer every P that is sensible and show the resulting M
+   ========================================================================= */
+const TABLE_MAX_P = 12;   // largest pile count considered "fits on a table"
+
+// Has the user explicitly chosen a pile count? Until they do, P tracks N
+// automatically. A programmatic `sel.value = ...` does NOT fire a change event,
+// so this flag only ever gets set by a real interaction.
+let userPickedP = false;
+
+function refreshPlan(){
+  const N = Math.max(2, Math.min(2000, parseInt($("N").value || "0", 10) || 2));
+  const sel = $("P"), prev = sel.value;
+  sel.innerHTML = "";
+
+  // Candidate pile counts: 2..12 is what actually fits on a table, plus the
+  // degenerate one-card-per-pile option. Each is annotated with M and with the
+  // total card handling N*M, which is the real cost of the shuffle.
+  const cands = [];
+  for (let P = 2; P <= TABLE_MAX_P; P++) cands.push(P);
+  if (!cands.includes(N)) cands.push(N);
+
+  // DEFAULT SELECTION RULE
+  //   primary   : minimise total cards handled, N*M  (fewest physical placements)
+  //   tie-break : smallest P                          (fewest piles on the table)
+  // Since N is fixed, minimising N*M is minimising M — but we compare on N*M
+  // directly so the rule stays correct if the cost model ever changes.
+  // P = N is excluded from the default: it trivially wins on N*M (M = 1) but it
+  // is a full table layout rather than a shuffle. It stays selectable.
+  let best = null;
+  for (const P of cands){
+    if (P > N) continue;
+    const M = passesFor(N, P), cost = N * M;
+    const o = document.createElement("option");
+    o.value = String(P);        // string, so === comparisons below are exact
+    o.dataset.cost = cost;
+    o.textContent = `${P} piles → ${M} pass${M>1?"es":""} (${cost} cards handled)`;
+    sel.appendChild(o);
+    if (P > TABLE_MAX_P) continue;                       // not a default candidate
+    if (best === null || cost < best.cost || (cost === best.cost && P < best.P))
+      best = {P, M, cost};
+  }
+
+  // Label the optimum so the recommendation is visible even when the user has
+  // overridden it.
+  const bestOpt = [...sel.options].find(o => o.value === String(best.P));
+  if (bestOpt) bestOpt.textContent += "  ← best";
+
+  // Only keep the previous choice if the user actually made it AND it is still
+  // a valid option for the new N. Otherwise re-derive the optimum, which is what
+  // makes P follow N as you type.
+  const prevStillValid = prev && [...sel.options].some(o => o.value === prev);
+  if (userPickedP && prevStillValid){
+    sel.value = prev;
+  } else {
+    sel.value = String(best.P);
+    userPickedP = false;          // an invalidated manual choice reverts to auto
+  }
+  showPlan();
+}
+function showPlan(){
+  const N = parseInt($("N").value,10), P = parseInt($("P").value,10);
+  const M = passesFor(N,P), R = Math.pow(P,M);
+  const secs = Math.round(N*M*parseFloat($("speed").value||"0.8"));
+  $("plan").innerHTML =
+    `N = ${N}, P = ${P} → <strong>M = ⌈log<sub>${P}</sub> ${N}⌉ = ${M}</strong>, ` +
+    `key space P<sup>M</sup> = ${R.toLocaleString()} ≥ ${N} ✓ · ` +
+    `${N*M} placements, about ${Math.floor(secs/60)}m ${secs%60}s of dealing.` +
+    (userPickedP ? ` <a href="#" id="autoP" style="color:var(--accent)">use best</a>` : "");
+  const a = $("autoP");
+  if (a) a.addEventListener("click", e=>{ e.preventDefault(); userPickedP = false; refreshPlan(); });
+}
+
+/* =========================================================================
+   6. RUNNING A PASS
+   ========================================================================= */
+function beginShuffle(){
+  S.N = parseInt($("N").value,10);
+  S.P = parseInt($("P").value,10);
+  S.M = passesFor(S.N, S.P);
+  S.R = Math.pow(S.P, S.M);
+  if (S.R > 2**31) { alert("Key space too large; use fewer piles or fewer passes."); return; }
+
+  S.keys  = distinctKeys(S.N, S.R);        // step 1: the random injection
+  S.order = Array.from({length:S.N}, (_,i)=>i);
+  S.pass  = 0;
+  beginPass();
+  $("setup").classList.add("hidden");
+  $("done").classList.add("hidden");
+  $("deal").classList.remove("hidden");
+}
+
+function beginPass(){
+  // Digits for the cards in their CURRENT physical order. This is why you
+  // never need to identify individual cards: you just deal top to bottom and
+  // follow the numbers.
+  S.digits = S.order.map(c => digitOf(S.keys[c], S.pass, S.P));
+  S.pos = 0;
+  stop();
+  $("stackBox").classList.add("hidden");
+  $("nextWrap").classList.add("hidden");
+  renderPass();
+}
+
+function renderPass(){
+  $("passLabel").textContent = `Pass ${S.pass+1} of ${S.M}`;
+
+  // Target counts per pile = the checksum you verify against before stacking.
+  const target = new Array(S.P).fill(0);
+  S.digits.forEach(d => target[d]++);
+
+  $("pileCounts").innerHTML = target.map((t,i)=>
+    `<div class="pl" id="pl${i}"><div class="n">pile ${i+1}</div>
+       <div class="c"><span id="pc${i}">0</span><small>/${t}</small></div></div>`).join("");
+
+  $("seq").innerHTML = S.digits.map((d,i)=>
+    `<b id="sq${i}">${d+1}</b>`).join("");
+
+  paint();
+}
+
+/* Repaint everything that depends on S.pos. Called after every step, so it
+   must stay cheap — it only touches the nodes whose state can change. */
+function paint(){
+  const n = S.N, i = S.pos;
+  $("counter").textContent = `${i} / ${n}`;
+  $("prog").style.width = (100*i/n) + "%";
+
+  if (i === 0){
+    $("cardno").textContent = "ready — deal from the top of the deck";
+    $("pileBig").textContent = "—"; $("pileBig").classList.add("idle");
+    $("hint").textContent = "";
+  } else if (i <= n){
+    $("cardno").textContent = `card ${i}`;
+    $("pileBig").textContent = S.digits[i-1] + 1;   // piles labelled 1..P for humans
+    $("pileBig").classList.remove("idle");
+    $("hint").textContent = i === n ? "last card" : `next: pile ${S.digits[i]+1}`;
+  }
+
+  // running per-pile counts
+  const run = new Array(S.P).fill(0);
+  for (let k = 0; k < i; k++) run[S.digits[k]]++;
+  const target = new Array(S.P).fill(0);
+  S.digits.forEach(d => target[d]++);
+  for (let p = 0; p < S.P; p++){
+    $("pc"+p).textContent = run[p];
+    $("pl"+p).classList.toggle("filled", run[p] === target[p] && target[p] > 0);
+  }
+
+  // sequence strip highlighting
+  for (let k = 0; k < n; k++){
+    const el = $("sq"+k);
+    el.className = k === i-1 ? "now" : (k < i ? "done" : "");
+  }
+  const cur = $("sq"+(i-1));
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({block:"nearest"});
+
+  if (i >= n) finishPass();
+}
+
+function stepFwd(){
+  if (S.pos >= S.N) return;
+  S.pos++; tick(); paint();
+}
+function stepBack(){
+  if (S.pos <= 0) return;
+  stop(); S.pos--;
+  $("stackBox").classList.add("hidden"); $("nextWrap").classList.add("hidden");
+  paint();
+}
+function play(){
+  if (S.pos >= S.N) return;
+  S.playing = true; $("play").textContent = "Pause";
+  const ms = Math.max(100, parseFloat($("speed").value||"0.8")*1000);
+  stepFwd();
+  S.timer = setInterval(()=>{ stepFwd(); if (S.pos >= S.N) stop(); }, ms);
+}
+function stop(){
+  S.playing = false; $("play").textContent = "Play";
+  if (S.timer){ clearInterval(S.timer); S.timer = null; }
+}
+
+/* End of a pass: tell the user how to collect the piles. The stacking order
+   is FIXED and ascending — this is the part that makes it a radix sort. */
+function finishPass(){
+  stop();
+  const order = Array.from({length:S.P},(_,i)=>i+1).join(" → ");
+  $("stackBox").innerHTML =
+    `<strong>Pass ${S.pass+1} dealt.</strong> Stack <code>${order}</code>
+     — pile 1 on top, pile ${S.P} at the bottom. Do not flip or reorder the piles.`;
+  $("stackBox").classList.remove("hidden");
+  $("next").textContent = (S.pass+1 < S.M) ? "Next pass →" : "Finish";
+  $("nextWrap").classList.remove("hidden");
+}
+
+/* Apply the pass to our model of the deck, then move on. */
+function nextPass(){
+  const piles = Array.from({length:S.P},()=>[]);
+  S.order.forEach((c,i) => piles[S.digits[i]].push(c));   // stable: push preserves order
+  S.order = [].concat(...piles);                          // pile 0 on top
+
+  S.pass++;
+  if (S.pass < S.M){ beginPass(); }
+  else {
+    $("deal").classList.add("hidden");
+    $("done").classList.remove("hidden");
+  }
+}
+
+/* =========================================================================
+   7. SELF TEST
+   ------------------------------------------------------------------------
+   Runs the same distinct-key + stable-deal pipeline on a tiny deck and does a
+   chi-square goodness-of-fit against uniform over all N! orderings. Uses a
+   fast local PRNG for the test only (we need speed, not cryptography, to do
+   150k trials in the browser).
+   ========================================================================= */
+function selfTest(){
+  const out = $("testOut");
+  out.innerHTML = "<div class='note'>running…</div>";
+  setTimeout(()=>{
+    let s = 123456789;
+    const rnd = m => { s ^= s<<13; s^=s>>>17; s^=s<<5; s|=0; return ((s>>>0) % m); };
+
+    // rev = true simulates the face-down convention, where every pile comes back
+    // internally reversed. It should be just as uniform as the stable deal.
+    function trial(N,P,M,rev){
+      const R = Math.pow(P,M);
+      // distinct keys via partial Fisher-Yates on a real array (R is tiny here)
+      const arr = Array.from({length:R},(_,i)=>i);
+      const keys = [];
+      for (let i=0;i<N;i++){ const j=i+rnd(R-i); [arr[i],arr[j]]=[arr[j],arr[i]]; keys.push(arr[i]); }
+      let order = Array.from({length:N},(_,i)=>i);
+      for (let p=0;p<M;p++){
+        const piles = Array.from({length:P},()=>[]);
+        for (const c of order) piles[digitOf(keys[c],p,P)].push(c);
+        order = [].concat(...piles.map(q => rev ? q.slice().reverse() : q));
+      }
+      return order.join("");
+    }
+    const cases = [[5,3,2,true],[6,2,3,true],[5,3,2,false],[6,2,3,false]];
+    let html = "<table><tr><th>case</th><th>outcomes seen</th><th>χ²</th><th>df</th><th></th></tr>";
+    for (const [N,P,M,rev] of cases){
+      const T = 150000, cnt = new Map();
+      for (let t=0;t<T;t++){ const k = trial(N,P,M,rev); cnt.set(k,(cnt.get(k)||0)+1); }
+      let fact = 1; for (let i=2;i<=N;i++) fact*=i;
+      const exp = T/fact;
+      let chi = 0, seen = 0;
+      // sum over ALL N! permutations, including any never observed
+      const perms = permutations(N);
+      for (const p of perms){ const o = cnt.get(p)||0; if(o) seen++; chi += (o-exp)*(o-exp)/exp; }
+      const df = fact-1;
+      const ok = chi < df + 4*Math.sqrt(2*df);   // ~4 sigma band
+      html += `<tr><td>N=${N}, P=${P}, M=${M} <span style="color:var(--dim)">`+
+              `${rev?"face-down":"face-up"}</span></td><td>${seen}/${fact}</td>`+
+              `<td>${chi.toFixed(1)}</td><td>${df}</td>`+
+              `<td class="${ok?'ok':'bad'}">${ok?'uniform ✓':'suspicious'}</td></tr>`;
+    }
+    out.innerHTML = html + "</table><div class='note'>χ² near df means the observed "+
+      "distribution over all N! orderings is consistent with exact uniformity.</div>";
+  }, 30);
+}
+function permutations(N){
+  const res = [], a = Array.from({length:N},(_,i)=>i);
+  (function rec(k){
+    if (k === N){ res.push(a.join("")); return; }
+    for (let i=k;i<N;i++){ [a[k],a[i]]=[a[i],a[k]]; rec(k+1); [a[k],a[i]]=[a[i],a[k]]; }
+  })(0);
+  return res;
+}
+
+/* =========================================================================
+   8. WIRING
+   ========================================================================= */
+$("N").addEventListener("input", refreshPlan);
+$("P").addEventListener("change", ()=>{ userPickedP = true; showPlan(); });
+$("speed").addEventListener("input", showPlan);
+$("start").addEventListener("click", beginShuffle);
+$("play").addEventListener("click", ()=> S.playing ? stop() : play());
+$("step").addEventListener("click", ()=>{ stop(); stepFwd(); });
+$("back").addEventListener("click", stepBack);
+$("next").addEventListener("click", nextPass);
+$("abort").addEventListener("click", ()=>{
+  stop(); $("deal").classList.add("hidden"); $("setup").classList.remove("hidden");
+});
+$("again").addEventListener("click", ()=>{
+  $("done").classList.add("hidden"); $("setup").classList.remove("hidden");
+});
+$("selftest").addEventListener("click", selfTest);
+
+/* MathJax measures font metrics against the live layout, and a closed <details>
+   is display:none — so equations typeset while hidden can come out mis-sized.
+   Re-typeset the theory panel the first time it is opened. */
+let theoryTypeset = false;
+$("theory").addEventListener("toggle", function(){
+  if (!this.open || theoryTypeset) return;
+  if (window.MathJax && MathJax.typesetPromise){
+    theoryTypeset = true;
+    MathJax.typesetPromise([this]).catch(()=>{ theoryTypeset = false; });
+  }
+});
+document.addEventListener("keydown", e=>{
+  if ($("deal").classList.contains("hidden")) return;
+  if (e.code === "Space"){ e.preventDefault(); S.playing ? stop() : play(); }
+  if (e.code === "ArrowRight"){ e.preventDefault(); stop(); stepFwd(); }
+  if (e.code === "ArrowLeft"){ e.preventDefault(); stepBack(); }
+});
+
+refreshPlan();
+</script>
+</body>
+</html>
