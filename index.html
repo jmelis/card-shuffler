@@ -497,6 +497,7 @@ const S = {
   pass:0,         // 0-based pass index
   pos:0,          // how many cards of this pass have been dealt
   unknownN:false, // true until the real deck size is known; then N is exact
+  lead:0,         // count-in beats still owed before the next card
   timer:null,
   playing:false
 };
@@ -714,16 +715,38 @@ function stepBack(){
   $("stackBox").classList.add("hidden"); $("nextWrap").classList.add("hidden");
   paint();
 }
+/* Pressing Play used to put the first number on screen instantly, which is a
+   beat too fast to get a hand on the deck. Two count-in beats first, at the
+   dealing tempo, so the rhythm you hear during the count-in is the rhythm you
+   deal to. Every press gets one, including resuming after a pause. */
+const COUNT_IN = 2;
+
+/* One beat of the count-in: the same tick as a card, but nothing is dealt. */
+function countBeat(){
+  $("hint").textContent = `count-in… ${S.lead}`;
+  S.lead--;
+  tick();
+}
+
 function play(){
   if (S.pos >= S.N) return;
   S.playing = true; $("play").textContent = "Pause";
   const ms = Math.max(100, parseFloat($("speed").value||"0.8")*1000);
-  stepFwd();
-  S.timer = setInterval(()=>{ stepFwd(); if (S.pos >= S.N) stop(); }, ms);
+  S.lead = COUNT_IN;
+  countBeat();                       // first beat lands on the press itself
+  S.timer = setInterval(()=>{
+    if (S.lead > 0){ countBeat(); return; }
+    stepFwd();
+    if (S.pos >= S.N) stop();
+  }, ms);
 }
 function stop(){
   S.playing = false; $("play").textContent = "Play";
   if (S.timer){ clearInterval(S.timer); S.timer = null; }
+  // Aborted mid-count-in: drop the remaining beats and put the hint back.
+  // S.lead > 0 implies S.pos < S.N (play() bails otherwise), so this repaint
+  // cannot re-enter finishPass.
+  if (S.lead > 0){ S.lead = 0; paint(); }
 }
 
 /* End of a pass: tell the user how to collect the piles. The stacking order
