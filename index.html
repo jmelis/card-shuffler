@@ -44,8 +44,8 @@
     order-preserving alternative and is equally exact. What breaks it is mixing
     the two inside one shuffle.
   * Stack in the fixed pile order shown. Do not improvise.
-  * One misdeal breaks exactness. The per-pile counts are displayed as a
-    checksum if you want one.
+  * One misdeal breaks exactness. At the end of each pass the app shows what
+    each pile should hold, so a glance catches one before it is stacked away.
 
   UNKNOWN DECK SIZE
   -----------------
@@ -124,42 +124,36 @@
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
   .controls button{flex:1 1 90px;min-width:80px}
 
-  /* ---- the big "card N -> pile X" readout ---- */
-  .stage{text-align:center;padding:18px 8px 6px}
   .cardno{color:var(--dim);font-size:14px;font-variant-numeric:tabular-nums}
-  .pile{font-family:var(--mono);font-size:clamp(72px,26vw,132px);line-height:1.05;
-        font-weight:700;color:var(--accent);letter-spacing:-.03em}
-  .pile.idle{color:var(--dim)}
-  .hint{color:var(--dim);font-size:14px;min-height:1.5em}
-  .bar{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin:14px 0 4px}
-  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .12s linear}
 
-  /* ---- full digit sequence, so you can recover if you lose your place ---- */
-  .seq{display:flex;flex-wrap:wrap;gap:4px;margin-top:14px;
-       max-height:190px;overflow:auto;padding:4px;background:var(--panel2);
-       border:1px solid var(--line);border-radius:10px}
-  .seq b{font-family:var(--mono);font-weight:500;font-size:13px;width:26px;height:26px;
-         display:grid;place-items:center;border-radius:6px;background:#262b3a;color:var(--dim)}
-  .seq b.done{color:var(--fg)}
-  .seq b.now{background:var(--accent);color:#0b1020;font-weight:700}
-
-  /* ---- per-pile checksums ---- */
-  .piles{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-  .pl{flex:1 1 78px;background:var(--panel2);border:1px solid var(--line);
-      border-radius:10px;padding:8px 10px;text-align:center}
-  .pl .n{font-size:12px;color:var(--dim)}
-  .pl .c{font-family:var(--mono);font-size:19px}
-  .pl.filled{border-color:var(--good)}
-  .pl .c small{color:var(--dim);font-size:13px}
-  /* unknown-N pass 1: the targets are upper bounds, not checksums */
-  .pl.approx{opacity:.55}
-  .pl.approx .c{color:var(--dim)}
+  /* ---- THE GRID: one cell per card, holding the pile that card goes to ----
+     Auto-fill so it reflows from phone to desktop without a breakpoint, and
+     every cell carries its own card number so you can find your place in it
+     without counting. */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(54px,1fr));
+        gap:6px;margin-top:12px}
+  .cell{position:relative;background:var(--panel2);border:1px solid var(--line);
+        border-radius:10px;padding:14px 4px 8px;text-align:center;cursor:pointer;
+        user-select:none;-webkit-tap-highlight-color:transparent}
+  .cell:hover{border-color:var(--accent)}
+  .cell i{position:absolute;top:3px;left:0;right:0;font-style:normal;
+          font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .cell b{font-family:var(--mono);font-size:23px;font-weight:700;color:var(--accent);
+          line-height:1}
+  .cell.done{opacity:.3}
+  .cell.now{border-color:var(--accent);background:#243049}
+  .cell.now i{color:var(--accent)}
 
   .stack{background:#20283a;border:1px solid #33507d;border-radius:10px;padding:12px 14px;margin-top:14px}
   .stack code{font-family:var(--mono);color:var(--accent)}
+  .stack p{margin:9px 0 0}
+
+  /* ---- end-of-pass checksum: what each pile should hold before you stack ---- */
+  .check{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0}
+  .check span{background:#182238;border:1px solid #33507d;border-radius:8px;
+              padding:4px 10px;font-size:13px;color:var(--dim)}
+  .check b{font-family:var(--mono);color:var(--fg);font-size:15px;margin-left:6px}
   .note{color:var(--dim);font-size:13px;margin-top:10px}
-  .kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);
-       border-radius:5px;padding:1px 6px;font-size:12px}
   details{margin-top:16px;color:var(--dim);font-size:14px}
   summary{cursor:pointer;color:var(--accent);padding:4px 0}
   details .panel{background:var(--panel2)}
@@ -199,10 +193,6 @@
         <label for="P">Piles (P)</label>
         <select id="P"></select>
       </div>
-      <div>
-        <label for="speed">Seconds per card</label>
-        <input id="speed" type="number" min="0.1" max="5" step="0.1" value="0.8" inputmode="decimal">
-      </div>
     </div>
     <label style="display:flex;align-items:center;gap:8px;margin:12px 0 0">
       <input type="checkbox" id="unknown" style="width:auto"> I don't know the exact count
@@ -210,9 +200,6 @@
     <div class="note" id="plan"></div>
     <div class="controls">
       <button class="primary" id="start">Start shuffle</button>
-      <label style="flex:1 1 120px;display:flex;align-items:center;gap:8px;margin:0;color:var(--dim)">
-        <input type="checkbox" id="beep" checked style="width:auto"> tick sound
-      </label>
     </div>
   </div>
 
@@ -223,43 +210,27 @@
       <span class="cardno" id="counter"></span>
     </div>
 
-    <div class="stage">
-      <div class="cardno" id="cardno">press Play, then deal from the top</div>
-      <div class="pile idle" id="pileBig">—</div>
-      <div class="hint" id="hint"></div>
-    </div>
+    <div class="note" id="dealHint"></div>
 
-    <div class="bar"><i id="prog"></i></div>
+    <!-- The whole pass at once: cell i says which pile card i goes to. Deal at
+         your own pace and read across. Tapping a cell marks your place, which is
+         only bookkeeping — nothing about the shuffle depends on it. -->
+    <div class="grid" id="grid"></div>
 
-    <div class="controls">
-      <button id="play" class="primary">Play</button>
-      <button id="back">◀ Back</button>
-      <button id="step">Step ▶</button>
-      <button id="abort">Restart</button>
-    </div>
-
-    <!-- Unknown-N, pass 1 only: whatever you just dealt was the whole deck. -->
+    <!-- Unknown-N, pass 1 only: whatever you dealt was the whole deck. -->
     <div class="controls hidden" id="ranOutWrap">
       <button id="ranOut">Deck ran out — that was the last card</button>
     </div>
 
-    <!-- Live checksum: how many cards belong in each pile vs how many placed -->
-    <div class="piles" id="pileCounts"></div>
+    <!-- Verify the piles, then collect them -->
+    <div class="stack" id="stackBox"></div>
 
-    <!-- Whole sequence for this pass, in case you lose your place -->
-    <div class="seq" id="seq"></div>
-
-    <!-- Shown when the pass finishes: how to collect the piles -->
-    <div class="stack hidden" id="stackBox"></div>
-    <div class="controls hidden" id="nextWrap">
+    <div class="controls">
       <button class="primary" id="next">Next pass →</button>
+      <button id="abort">Restart</button>
     </div>
 
-    <div class="note">
-      Deal face&#8209;down. Never flip or reorder a pile.
-      Keys: <span class="kbd">space</span> play/pause · <span class="kbd">→</span> step ·
-      <span class="kbd">←</span> back.
-    </div>
+    <div class="note">Deal face&#8209;down. Never flip or reorder a pile.</div>
   </div>
 
   <!-- ==================== DONE ==================== -->
@@ -277,13 +248,16 @@
     <div class="panel prose">
       <p><em>P</em> piles in a row, left to right, same spots every pass.</p>
       <ol>
-        <li>Deal from the top of the deck, face&#8209;down, one card per number.</li>
+        <li>Read the grid in order, one card per cell: cell 1 says which pile the
+        top card goes to, cell 2 the next, and so on. Deal face&#8209;down, at
+        whatever pace suits you.</li>
         <li>Stack pile 1 onto 2, that onto 3, and so on rightwards. Pile 1 ends on top.</li>
         <li><strong>Next pass</strong>, repeat.</li>
       </ol>
       <div class="stack">Never flip or reorder a pile, and always stack low to high.
         Those two rules are the shuffle.</div>
-      <p>Misdeal, dropped card, lost your place? <strong>Restart</strong>.</p>
+      <p>Lost your place? Tap the last cell you dealt — the grid greys out
+      everything behind it. Actually misdealt a card? <strong>Restart</strong>.</p>
     </div>
   </details>
 
@@ -495,11 +469,10 @@ const S = {
   order:[],       // card ids, top of deck first, in the CURRENT physical order
   digits:[],      // pile digit for each position in `order`, this pass
   pass:0,         // 0-based pass index
-  pos:0,          // how many cards of this pass have been dealt
-  unknownN:false, // true until the real deck size is known; then N is exact
-  lead:0,         // count-in beats still owed before the next card
-  timer:null,
-  playing:false
+  pos:0,          // place marker: how many cards you have told us you dealt.
+                  // Bookkeeping only — the shuffle does not depend on it — but
+                  // unknown-N reads it as the real deck size.
+  unknownN:false  // true until the real deck size is known; then N is exact
 };
 
 /* Unknown-N mode is live only while pass 1 is still being dealt. On pass 2 the
@@ -508,21 +481,6 @@ const S = {
 const unknownPass1 = () => S.unknownN && S.pass === 0;
 
 const $ = id => document.getElementById(id);
-
-/* ---- a short WebAudio tick so you can watch the cards, not the screen ---- */
-let actx = null;
-function tick(){
-  if (!$("beep").checked) return;
-  try{
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.value = 880; o.type = "triangle";
-    g.gain.setValueAtTime(0.12, actx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.06);
-    o.connect(g).connect(actx.destination);
-    o.start(); o.stop(actx.currentTime + 0.07);
-  }catch(e){ /* audio is a nicety; never let it break the deal */ }
-}
 
 /* =========================================================================
    5. SETUP UI — offer every P that is sensible and show the resulting M
@@ -587,7 +545,6 @@ function refreshPlan(){
 function showPlan(){
   const N = parseInt($("N").value,10), P = parseInt($("P").value,10);
   const M = passesFor(N,P), R = Math.pow(P,M);
-  const secs = Math.round(N*M*parseFloat($("speed").value||"0.8"));
   const unk = $("unknown").checked;
   const sym = unk ? "N′" : "N";
   $("labN").textContent = unk ? "Max cards (N′)" : "Cards (N)";
@@ -598,7 +555,7 @@ function showPlan(){
   $("plan").innerHTML =
     `${sym} = ${N}, P = ${P} → <strong>M = ⌈log<sub>${P}</sub> ${N}⌉ = ${M}</strong>, ` +
     `key space P<sup>M</sup> = ${R.toLocaleString()} ≥ ${N} ✓ · ` +
-    `${N*M} placements, about ${Math.floor(secs/60)}m ${secs%60}s of dealing.` +
+    `${N*M} placements in total.` +
     (unk ? `<br>Real count discovered during pass 1 — deal until the deck runs out, then ` +
            `press the button. Still ${M} pass${M>1?"es":""} for any real count above ` +
            `${Math.pow(P,M-1)}; below that the bound costs one extra pass.` : "") +
@@ -633,134 +590,72 @@ function beginPass(){
   // follow the numbers.
   S.digits = S.order.map(c => digitOf(S.keys[c], S.pass, S.P));
   S.pos = 0;
-  stop();
-  $("stackBox").classList.add("hidden");
-  $("nextWrap").classList.add("hidden");
   renderPass();
 }
 
+/* The whole pass, on one screen. Cell i tells you where card i goes, so you
+   deal at whatever pace suits you and read across — no timer, no stepping, no
+   waiting on the app. Everything the pass needs is here at once: the numbers,
+   the counts to check the piles against, and how to stack them. */
 function renderPass(){
   $("passLabel").textContent = `Pass ${S.pass+1} of ${S.M}`;
+  $("dealHint").innerHTML =
+    `Deal from the top of the deck, one card per cell, in order. ` +
+    `<span style="color:var(--dim)">Tap a cell to mark where you are.</span>`;
 
-  // Target counts per pile = the checksum you verify against before stacking.
-  // While the deck size is still unknown these are upper bounds instead: they
-  // count the phantom cards past the end of the real deck, so they are shown
-  // greyed out and marked ≤. Truncation restores them to real checksums.
-  const target = new Array(S.P).fill(0);
-  S.digits.forEach(d => target[d]++);
-  const approx = unknownPass1();
+  $("grid").innerHTML = S.digits.map((d,i)=>
+    `<div class="cell" data-i="${i}"><i>${i+1}</i><b>${d+1}</b></div>`).join("");
 
-  $("pileCounts").innerHTML = target.map((t,i)=>
-    `<div class="pl${approx?" approx":""}" id="pl${i}"><div class="n">pile ${i+1}</div>
-       <div class="c"><span id="pc${i}">0</span><small>/${approx?"≤":""}${t}</small></div></div>`).join("");
-
-  $("seq").innerHTML = S.digits.map((d,i)=>
-    `<b id="sq${i}">${d+1}</b>`).join("");
-
+  renderStack();
   paint();
 }
 
-/* Repaint everything that depends on S.pos. Called after every step, so it
-   must stay cheap — it only touches the nodes whose state can change. */
+/* What each pile should hold, and how to collect them. During unknown-N pass 1
+   the counts still include the phantom cards past the end of the real deck, so
+   they are upper bounds until the deck size is pinned down — say so rather than
+   passing them off as a checksum. */
+function renderStack(){
+  const approx = unknownPass1();
+  const target = new Array(S.P).fill(0);
+  S.digits.forEach(d => target[d]++);
+  const order = Array.from({length:S.P},(_,i)=>i+1).join(" → ");
+  $("stackBox").innerHTML =
+    `<strong>When the pass is dealt</strong>, the piles should hold
+     ${approx ? "at most" : "exactly"}:
+     <div class="check">${target.map((t,i)=>
+       `<span>pile ${i+1}<b>${approx?"≤":""}${t}</b></span>`).join("")}</div>
+     <p>${approx ? `Upper bounds until you say how big the deck really is. ` : ""}` +
+    `Then stack <code>${order}</code> — pile 1 on top, pile ${S.P} at the
+     bottom. Do not flip or reorder the piles.</p>`;
+  $("next").textContent = (S.pass+1 < S.M) ? "Next pass →" : "Finish";
+}
+
+/* Everything that depends on the place marker. Marking is pure bookkeeping —
+   it exists so you can put the phone down mid-pass and find your spot again,
+   and so unknown-N has a card count to work from. */
 function paint(){
   const n = S.N, i = S.pos, approx = unknownPass1();
-  $("counter").textContent = `${i} / ${approx?"≤":""}${n}`;
-  $("prog").style.width = (100*i/n) + "%";
+  $("counter").textContent = i ? `card ${i} of ${approx?"≤":""}${n}`
+                               : `${approx?"up to ":""}${n} cards`;
 
   // "the deck ran out" is only meaningful while the size is still unknown, and
   // only once there is a plausible deck behind us (n >= 2).
   $("ranOutWrap").classList.toggle("hidden", !approx);
   $("ranOut").disabled = !(approx && i >= 2);
 
-  if (i === 0){
-    $("cardno").textContent = "ready — deal from the top of the deck";
-    $("pileBig").textContent = "—"; $("pileBig").classList.add("idle");
-    $("hint").textContent = "";
-  } else if (i <= n){
-    $("cardno").textContent = `card ${i}`;
-    $("pileBig").textContent = S.digits[i-1] + 1;   // piles labelled 1..P for humans
-    $("pileBig").classList.remove("idle");
-    $("hint").textContent = i === n ? "last card" : `next: pile ${S.digits[i]+1}`;
-  }
-
-  // running per-pile counts
-  const run = new Array(S.P).fill(0);
-  for (let k = 0; k < i; k++) run[S.digits[k]]++;
-  const target = new Array(S.P).fill(0);
-  S.digits.forEach(d => target[d]++);
-  for (let p = 0; p < S.P; p++){
-    $("pc"+p).textContent = run[p];
-    // no green ticks against an upper bound — that is not a checksum yet
-    $("pl"+p).classList.toggle("filled", !approx && run[p] === target[p] && target[p] > 0);
-  }
-
-  // sequence strip highlighting
-  for (let k = 0; k < n; k++){
-    const el = $("sq"+k);
-    el.className = k === i-1 ? "now" : (k < i ? "done" : "");
-  }
-  const cur = $("sq"+(i-1));
-  if (cur && cur.scrollIntoView) cur.scrollIntoView({block:"nearest"});
-
-  if (i >= n) finishPass();
+  const cells = $("grid").children;
+  for (let k = 0; k < cells.length; k++)
+    cells[k].className = "cell" + (k === i-1 ? " now" : (k < i ? " done" : ""));
 }
 
-function stepFwd(){
-  if (S.pos >= S.N) return;
-  S.pos++; tick(); paint();
-}
-function stepBack(){
-  if (S.pos <= 0) return;
-  stop(); S.pos--;
-  $("stackBox").classList.add("hidden"); $("nextWrap").classList.add("hidden");
+/* Tap a cell: mark that card as the last one you dealt. Tapping the marked
+   cell again clears the marker, so it is easy to undo a mis-tap. */
+function markCard(e){
+  const cell = e.target.closest(".cell");
+  if (!cell) return;
+  const k = parseInt(cell.dataset.i, 10) + 1;
+  S.pos = (S.pos === k) ? 0 : k;
   paint();
-}
-/* Pressing Play used to put the first number on screen instantly, which is a
-   beat too fast to get a hand on the deck. Two count-in beats first, at the
-   dealing tempo, so the rhythm you hear during the count-in is the rhythm you
-   deal to. Every press gets one, including resuming after a pause. */
-const COUNT_IN = 2;
-
-/* One beat of the count-in: the same tick as a card, but nothing is dealt. */
-function countBeat(){
-  $("hint").textContent = `count-in… ${S.lead}`;
-  S.lead--;
-  tick();
-}
-
-function play(){
-  if (S.pos >= S.N) return;
-  S.playing = true; $("play").textContent = "Pause";
-  const ms = Math.max(100, parseFloat($("speed").value||"0.8")*1000);
-  S.lead = COUNT_IN;
-  countBeat();                       // first beat lands on the press itself
-  S.timer = setInterval(()=>{
-    if (S.lead > 0){ countBeat(); return; }
-    stepFwd();
-    if (S.pos >= S.N) stop();
-  }, ms);
-}
-function stop(){
-  S.playing = false; $("play").textContent = "Play";
-  if (S.timer){ clearInterval(S.timer); S.timer = null; }
-  // Aborted mid-count-in: drop the remaining beats and put the hint back.
-  // S.lead > 0 implies S.pos < S.N (play() bails otherwise), so this repaint
-  // cannot re-enter finishPass.
-  if (S.lead > 0){ S.lead = 0; paint(); }
-}
-
-/* End of a pass: tell the user how to collect the piles. The stacking order
-   is FIXED and ascending — this is the part that makes it a radix sort. */
-function finishPass(){
-  stop();
-  $("ranOutWrap").classList.add("hidden");
-  const order = Array.from({length:S.P},(_,i)=>i+1).join(" → ");
-  $("stackBox").innerHTML =
-    `<strong>Pass ${S.pass+1} dealt.</strong> Stack <code>${order}</code>
-     — pile 1 on top, pile ${S.P} at the bottom. Do not flip or reorder the piles.`;
-  $("stackBox").classList.remove("hidden");
-  $("next").textContent = (S.pass+1 < S.M) ? "Next pass →" : "Finish";
-  $("nextWrap").classList.remove("hidden");
 }
 
 /* The deck ran out mid-deal: whatever has been placed IS the whole deck, so the
@@ -774,7 +669,6 @@ function finishPass(){
    extra pass and costs nothing in exactness. */
 function deckRanOut(){
   if (!unknownPass1() || S.pos < 2) return;
-  stop();
   const n = S.pos;
 
   // On pass 1 the deck is still in its original order, so order is the identity
@@ -784,10 +678,9 @@ function deckRanOut(){
   S.keys   = S.keys.slice(0, n);
   S.order  = S.order.slice(0, n);
   S.digits = S.digits.slice(0, n);
-  S.unknownN = false;              // size is known from here on; targets are real
+  S.unknownN = false;              // size is known from here on; counts are real
 
-  renderPass();                    // redraw the checksums against the real digits
-  finishPass();
+  renderPass();                    // grid and pile counts redraw against the real digits
 }
 
 /* Apply the pass to our model of the deck, then move on. The piles come back
@@ -902,16 +795,13 @@ function permutations(N){
    ========================================================================= */
 $("N").addEventListener("input", refreshPlan);
 $("P").addEventListener("change", ()=>{ userPickedP = true; showPlan(); });
-$("speed").addEventListener("input", showPlan);
 $("unknown").addEventListener("change", showPlan);
 $("start").addEventListener("click", beginShuffle);
-$("play").addEventListener("click", ()=> S.playing ? stop() : play());
-$("step").addEventListener("click", ()=>{ stop(); stepFwd(); });
-$("back").addEventListener("click", stepBack);
+$("grid").addEventListener("click", markCard);
 $("next").addEventListener("click", nextPass);
 $("ranOut").addEventListener("click", deckRanOut);
 $("abort").addEventListener("click", ()=>{
-  stop(); $("deal").classList.add("hidden"); $("setup").classList.remove("hidden");
+  $("deal").classList.add("hidden"); $("setup").classList.remove("hidden");
 });
 $("again").addEventListener("click", ()=>{
   $("done").classList.add("hidden"); $("setup").classList.remove("hidden");
@@ -929,13 +819,6 @@ $("theory").addEventListener("toggle", function(){
     MathJax.typesetPromise([this]).catch(()=>{ theoryTypeset = false; });
   }
 });
-document.addEventListener("keydown", e=>{
-  if ($("deal").classList.contains("hidden")) return;
-  if (e.code === "Space"){ e.preventDefault(); S.playing ? stop() : play(); }
-  if (e.code === "ArrowRight"){ e.preventDefault(); stop(); stepFwd(); }
-  if (e.code === "ArrowLeft"){ e.preventDefault(); stepBack(); }
-});
-
 refreshPlan();
 </script>
 </body>
