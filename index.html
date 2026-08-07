@@ -37,13 +37,31 @@
   ----------------------
   * Every pile must be treated identically. The app instructs a face-down deal
     and no flipping, which leaves each pile internally REVERSED — that is still
-    exactly uniform, because it just sorts by a relabelled key (for M = 2 the
-    deck ends sorted by d1*P + (P-1-d0), a bijection on the key space). A
-    face-up deal with every pile flipped is the order-preserving alternative and
-    is equally exact. What breaks it is mixing the two inside one shuffle.
+    exactly uniform, because it just sorts by a relabelled key: complement every
+    second digit, counting down from the most significant (for M = 2 the deck
+    ends sorted by d1*P + (P-1-d0)). Relabelling is a bijection on the key
+    space, so nothing is lost. A face-up deal with every pile flipped is the
+    order-preserving alternative and is equally exact. What breaks it is mixing
+    the two inside one shuffle.
   * Stack in the fixed pile order shown. Do not improvise.
   * One misdeal breaks exactness. The per-pile counts are displayed as a
     checksum if you want one.
+
+  UNKNOWN DECK SIZE
+  -----------------
+  You do not actually need to know N up front, only an upper bound N'. Generate
+  the keys for N', deal pass 1 until the deck runs out at some n <= N', then
+  throw away everything past the n-th card. This is exact because distinctKeys
+  is a partial Fisher-Yates: its first n outputs do not depend on N' at all, so
+  a uniform random injection {1..n} -> {0..R-1} is precisely the prefix of a
+  uniform random injection {1..N'} -> {0..R-1}. An oversized key space is
+  harmless — R >= n is all the argument ever needed. The only cost is one extra
+  pass, and only when ceil(log_P N') > ceil(log_P n).
+
+  Truncating on any LATER pass would be biased, not merely wasteful: after pass
+  1 the phantom cards are interleaved with the real ones, so the digits no
+  longer line up with the cards in hand. The app therefore offers this on pass 1
+  only.
 
   (Footnote for the curious: handing out INDEPENDENT digits instead of distinct
   keys turns this into an inverse riffle shuffle with parameter a = P, which is
@@ -133,6 +151,9 @@
   .pl .c{font-family:var(--mono);font-size:19px}
   .pl.filled{border-color:var(--good)}
   .pl .c small{color:var(--dim);font-size:13px}
+  /* unknown-N pass 1: the targets are upper bounds, not checksums */
+  .pl.approx{opacity:.55}
+  .pl.approx .c{color:var(--dim)}
 
   .stack{background:#20283a;border:1px solid #33507d;border-radius:10px;padding:12px 14px;margin-top:14px}
   .stack code{font-family:var(--mono);color:var(--accent)}
@@ -171,7 +192,7 @@
   <div class="panel" id="setup">
     <div class="row">
       <div>
-        <label for="N">Cards (N)</label>
+        <label for="N" id="labN">Cards (N)</label>
         <input id="N" type="number" min="2" max="2000" value="52" inputmode="numeric">
       </div>
       <div>
@@ -183,6 +204,9 @@
         <input id="speed" type="number" min="0.1" max="5" step="0.1" value="0.8" inputmode="decimal">
       </div>
     </div>
+    <label style="display:flex;align-items:center;gap:8px;margin:12px 0 0">
+      <input type="checkbox" id="unknown" style="width:auto"> I don't know the exact count
+    </label>
     <div class="note" id="plan"></div>
     <div class="controls">
       <button class="primary" id="start">Start shuffle</button>
@@ -212,6 +236,11 @@
       <button id="back">◀ Back</button>
       <button id="step">Step ▶</button>
       <button id="abort">Restart</button>
+    </div>
+
+    <!-- Unknown-N, pass 1 only: whatever you just dealt was the whole deck. -->
+    <div class="controls hidden" id="ranOutWrap">
+      <button id="ranOut">Deck ran out — that was the last card</button>
     </div>
 
     <!-- Live checksum: how many cards belong in each pile vs how many placed -->
@@ -302,12 +331,19 @@
 
       <p>Dealing face&#8209;down leaves each pile internally <em>reversed</em> rather than
       order-preserving. This is still exact: reversing every pile at every pass sorts the deck
-      by a relabelled key. With \(M = 2\) the final order is sorted by</p>
+      by the relabelled key</p>
 
-      $$f(k) \;=\; d_1 \cdot P + (P - 1 - d_0)$$
+      $$\tilde k \;=\; \sum_{j=0}^{M-1} \varepsilon_j P^{\,j},
+        \qquad
+        \varepsilon_j = \begin{cases}
+          P - 1 - d_j & M-1-j \ \text{odd}\\[2pt]
+          d_j & \text{otherwise}
+        \end{cases}$$
 
-      <p>where \(d_0, d_1\) are the key's digits. Relabelling is a bijection on the key space,
-      so distinct keys stay distinct and uniform stays uniform. Dealing face&#8209;up and
+      <p>where \(d_0, \dots, d_{M-1}\) are the key's digits — every second digit complemented,
+      counting down from the most significant. For \(M = 2\) that is
+      \(\tilde k = d_1 P + (P - 1 - d_0)\). Relabelling is a bijection on the key space, so
+      distinct keys stay distinct and uniform stays uniform. Dealing face&#8209;up and
       flipping each pile is the order-preserving alternative, equally exact. Mixing the two
       inside one shuffle is what breaks the guarantee.</p>
 
@@ -343,6 +379,25 @@
       <p>independent of the starting order, with no approximation and no mixing-time argument.
       The guarantee is conditional only on the deal being executed correctly.</p>
 
+      <h4>Not knowing how many cards you have</h4>
+      <p>An upper bound is enough. Tick <em>I don't know the exact count</em>, give a bound
+      \(N'\), and deal pass 1 until the deck runs out at some \(n \le N'\); the app then
+      discards everything past the \(n\)-th card and carries on.</p>
+
+      <p>This costs nothing in exactness. The key space only ever had to satisfy
+      \(P^M \ge n\), and overshooting to \(P^M \ge N'\) is harmless. The keys themselves are
+      drawn by a partial Fisher–Yates, so the first \(n\) of them are a uniform random
+      injection \(\{1..n\} \to \{0..P^M-1\}\) <em>regardless</em> of \(N'\) — the bound never
+      enters the first \(n\) draws. The exactness argument then applies verbatim to the \(n\)
+      cards that exist.</p>
+
+      <p>The offer stands on pass 1 only. From pass 2 the phantom cards are interleaved with
+      the real ones, so the digits no longer line up with the cards in hand, and stopping early
+      would be biased rather than merely wasteful. The one real cost is a possible extra pass:
+      \(M\) is fixed at \(\lceil \log_P N' \rceil\), which exceeds \(\lceil \log_P n \rceil\)
+      only when the bound crosses a power of \(P\). Guessing "40 to 60 cards" at \(P = 8\)
+      costs nothing, since \(64 \ge 60\) either way.</p>
+
       <h4>Where the randomness comes from</h4>
       <p>The keys are drawn from your browser's cryptographic generator
       (<code>crypto.getRandomValues</code>), not <code>Math.random</code>, and converted to a
@@ -351,9 +406,10 @@
 
       <h4>Self test</h4>
       <p>Runs the app's actual dealing logic on a small deck many times and compares the
-      distribution over all \(N!\) outcomes against uniform with a \(\chi^2\) test, for both
-      the face&#8209;down and face&#8209;up conventions. A correct implementation lands
-      \(\chi^2\) near its degrees of freedom.</p>
+      distribution over all \(N!\) outcomes against uniform with a \(\chi^2\) test — for the
+      face&#8209;down and face&#8209;up conventions, and for the unknown&#8209;\(N\) flow with
+      the deck truncated after pass 1. A correct implementation lands \(\chi^2\) near its
+      degrees of freedom.</p>
       <div class="controls"><button id="selftest">Run χ² self test</button></div>
       <div id="testOut"></div>
     </div>
@@ -417,6 +473,19 @@ function digitOf(key, pass, P){          // the pass-th base-P digit (pass 0 = L
   return Math.floor(key / Math.pow(P, pass)) % P;
 }
 
+/* One pass of the deal, as a pure function: cards go to piles by digit, then
+   the piles are stacked 0, 1, ... P-1. `reversePiles` is the convention flag —
+   a face-down deal with no flipping hands every pile back internally reversed,
+   which is what the physical deck actually does. The app and the self test both
+   go through here so the two can never drift apart. */
+const FACE_DOWN = true;
+
+function applyPass(order, digits, P, reversePiles){
+  const piles = Array.from({length:P}, () => []);
+  order.forEach((c,i) => piles[digits[i]].push(c));   // stable: push preserves deal order
+  return [].concat(...piles.map(q => reversePiles ? q.slice().reverse() : q));
+}
+
 /* =========================================================================
    4. APP STATE
    ========================================================================= */
@@ -427,9 +496,15 @@ const S = {
   digits:[],      // pile digit for each position in `order`, this pass
   pass:0,         // 0-based pass index
   pos:0,          // how many cards of this pass have been dealt
+  unknownN:false, // true until the real deck size is known; then N is exact
   timer:null,
   playing:false
 };
+
+/* Unknown-N mode is live only while pass 1 is still being dealt. On pass 2 the
+   phantom cards are already interleaved with the real ones, so truncating there
+   would attach the digits to the wrong cards — that is the biased case. */
+const unknownPass1 = () => S.unknownN && S.pass === 0;
 
 const $ = id => document.getElementById(id);
 
@@ -512,10 +587,20 @@ function showPlan(){
   const N = parseInt($("N").value,10), P = parseInt($("P").value,10);
   const M = passesFor(N,P), R = Math.pow(P,M);
   const secs = Math.round(N*M*parseFloat($("speed").value||"0.8"));
+  const unk = $("unknown").checked;
+  const sym = unk ? "N′" : "N";
+  $("labN").textContent = unk ? "Max cards (N′)" : "Cards (N)";
+
+  // In unknown mode M is fixed by the BOUND, so the plan is an upper bound too.
+  // The only cost of a loose bound is one extra pass, and only if the real count
+  // drops below P^(M-1) — anywhere inside the same bracket is free.
   $("plan").innerHTML =
-    `N = ${N}, P = ${P} → <strong>M = ⌈log<sub>${P}</sub> ${N}⌉ = ${M}</strong>, ` +
+    `${sym} = ${N}, P = ${P} → <strong>M = ⌈log<sub>${P}</sub> ${N}⌉ = ${M}</strong>, ` +
     `key space P<sup>M</sup> = ${R.toLocaleString()} ≥ ${N} ✓ · ` +
     `${N*M} placements, about ${Math.floor(secs/60)}m ${secs%60}s of dealing.` +
+    (unk ? `<br>Real count discovered during pass 1 — deal until the deck runs out, then ` +
+           `press the button. Still ${M} pass${M>1?"es":""} for any real count above ` +
+           `${Math.pow(P,M-1)}; below that the bound costs one extra pass.` : "") +
     (userPickedP ? ` <a href="#" id="autoP" style="color:var(--accent)">use best</a>` : "");
   const a = $("autoP");
   if (a) a.addEventListener("click", e=>{ e.preventDefault(); userPickedP = false; refreshPlan(); });
@@ -525,10 +610,11 @@ function showPlan(){
    6. RUNNING A PASS
    ========================================================================= */
 function beginShuffle(){
-  S.N = parseInt($("N").value,10);
+  S.N = parseInt($("N").value,10);         // in unknown mode this is the bound N'
   S.P = parseInt($("P").value,10);
   S.M = passesFor(S.N, S.P);
   S.R = Math.pow(S.P, S.M);
+  S.unknownN = $("unknown").checked;
   if (S.R > 2**31) { alert("Key space too large; use fewer piles or fewer passes."); return; }
 
   S.keys  = distinctKeys(S.N, S.R);        // step 1: the random injection
@@ -556,12 +642,16 @@ function renderPass(){
   $("passLabel").textContent = `Pass ${S.pass+1} of ${S.M}`;
 
   // Target counts per pile = the checksum you verify against before stacking.
+  // While the deck size is still unknown these are upper bounds instead: they
+  // count the phantom cards past the end of the real deck, so they are shown
+  // greyed out and marked ≤. Truncation restores them to real checksums.
   const target = new Array(S.P).fill(0);
   S.digits.forEach(d => target[d]++);
+  const approx = unknownPass1();
 
   $("pileCounts").innerHTML = target.map((t,i)=>
-    `<div class="pl" id="pl${i}"><div class="n">pile ${i+1}</div>
-       <div class="c"><span id="pc${i}">0</span><small>/${t}</small></div></div>`).join("");
+    `<div class="pl${approx?" approx":""}" id="pl${i}"><div class="n">pile ${i+1}</div>
+       <div class="c"><span id="pc${i}">0</span><small>/${approx?"≤":""}${t}</small></div></div>`).join("");
 
   $("seq").innerHTML = S.digits.map((d,i)=>
     `<b id="sq${i}">${d+1}</b>`).join("");
@@ -572,9 +662,14 @@ function renderPass(){
 /* Repaint everything that depends on S.pos. Called after every step, so it
    must stay cheap — it only touches the nodes whose state can change. */
 function paint(){
-  const n = S.N, i = S.pos;
-  $("counter").textContent = `${i} / ${n}`;
+  const n = S.N, i = S.pos, approx = unknownPass1();
+  $("counter").textContent = `${i} / ${approx?"≤":""}${n}`;
   $("prog").style.width = (100*i/n) + "%";
+
+  // "the deck ran out" is only meaningful while the size is still unknown, and
+  // only once there is a plausible deck behind us (n >= 2).
+  $("ranOutWrap").classList.toggle("hidden", !approx);
+  $("ranOut").disabled = !(approx && i >= 2);
 
   if (i === 0){
     $("cardno").textContent = "ready — deal from the top of the deck";
@@ -594,7 +689,8 @@ function paint(){
   S.digits.forEach(d => target[d]++);
   for (let p = 0; p < S.P; p++){
     $("pc"+p).textContent = run[p];
-    $("pl"+p).classList.toggle("filled", run[p] === target[p] && target[p] > 0);
+    // no green ticks against an upper bound — that is not a checksum yet
+    $("pl"+p).classList.toggle("filled", !approx && run[p] === target[p] && target[p] > 0);
   }
 
   // sequence strip highlighting
@@ -634,6 +730,7 @@ function stop(){
    is FIXED and ascending — this is the part that makes it a radix sort. */
 function finishPass(){
   stop();
+  $("ranOutWrap").classList.add("hidden");
   const order = Array.from({length:S.P},(_,i)=>i+1).join(" → ");
   $("stackBox").innerHTML =
     `<strong>Pass ${S.pass+1} dealt.</strong> Stack <code>${order}</code>
@@ -643,11 +740,38 @@ function finishPass(){
   $("nextWrap").classList.remove("hidden");
 }
 
-/* Apply the pass to our model of the deck, then move on. */
+/* The deck ran out mid-deal: whatever has been placed IS the whole deck, so the
+   real count is n = S.pos. Everything past the n-th card was a phantom and gets
+   dropped. Legal on pass 1 only — see unknownPass1.
+
+   M is deliberately NOT recomputed down to ceil(log_P n). The first digit of
+   every key was already drawn from the marginal induced by R = P^M; shrinking R
+   after the fact would re-weight keys that have already been committed to and
+   invalidate the injection argument. An oversized key space costs at most one
+   extra pass and costs nothing in exactness. */
+function deckRanOut(){
+  if (!unknownPass1() || S.pos < 2) return;
+  stop();
+  const n = S.pos;
+
+  // On pass 1 the deck is still in its original order, so order is the identity
+  // and card ids 0..n-1 are exactly the cards that were dealt. That is what
+  // makes a plain slice of the keys correct here.
+  S.N      = n;
+  S.keys   = S.keys.slice(0, n);
+  S.order  = S.order.slice(0, n);
+  S.digits = S.digits.slice(0, n);
+  S.unknownN = false;              // size is known from here on; targets are real
+
+  renderPass();                    // redraw the checksums against the real digits
+  finishPass();
+}
+
+/* Apply the pass to our model of the deck, then move on. The piles come back
+   internally reversed because the deal is face-down and nothing is flipped —
+   the model has to reverse them too or it stops describing the deck in hand. */
 function nextPass(){
-  const piles = Array.from({length:S.P},()=>[]);
-  S.order.forEach((c,i) => piles[S.digits[i]].push(c));   // stable: push preserves order
-  S.order = [].concat(...piles);                          // pile 0 on top
+  S.order = applyPass(S.order, S.digits, S.P, FACE_DOWN);
 
   S.pass++;
   if (S.pass < S.M){ beginPass(); }
@@ -672,40 +796,71 @@ function selfTest(){
     let s = 123456789;
     const rnd = m => { s ^= s<<13; s^=s>>>17; s^=s<<5; s|=0; return ((s>>>0) % m); };
 
-    // rev = true simulates the face-down convention, where every pile comes back
-    // internally reversed. It should be just as uniform as the stable deal.
-    function trial(N,P,M,rev){
-      const R = Math.pow(P,M);
-      // distinct keys via partial Fisher-Yates on a real array (R is tiny here)
-      const arr = Array.from({length:R},(_,i)=>i);
-      const keys = [];
+    // distinct keys via partial Fisher-Yates on a real array (R is tiny here)
+    function testKeys(N,R){
+      const arr = Array.from({length:R},(_,i)=>i), keys = [];
       for (let i=0;i<N;i++){ const j=i+rnd(R-i); [arr[i],arr[j]]=[arr[j],arr[i]]; keys.push(arr[i]); }
+      return keys;
+    }
+
+    // rev = true simulates the face-down convention, where every pile comes back
+    // internally reversed. It should be just as uniform as the stable deal. Both
+    // go through applyPass, the same function the app deals with.
+    function trial(N,P,M,rev){
+      const keys = testKeys(N, Math.pow(P,M));
       let order = Array.from({length:N},(_,i)=>i);
       for (let p=0;p<M;p++){
-        const piles = Array.from({length:P},()=>[]);
-        for (const c of order) piles[digitOf(keys[c],p,P)].push(c);
-        order = [].concat(...piles.map(q => rev ? q.slice().reverse() : q));
+        const digits = order.map(c => digitOf(keys[c],p,P));
+        order = applyPass(order, digits, P, rev);
       }
       return order.join("");
     }
-    const cases = [[5,3,2,true],[6,2,3,true],[5,3,2,false],[6,2,3,false]];
-    let html = "<table><tr><th>case</th><th>outcomes seen</th><th>χ²</th><th>df</th><th></th></tr>";
-    for (const [N,P,M,rev] of cases){
+
+    // Unknown-N: keys are drawn for the bound Np, the deck turns out to hold
+    // only n, and the model is truncated after pass 1 exactly as deckRanOut
+    // does it. The n surviving cards must still come out uniform over n!.
+    function trialUnknown(n,Np,P,M,rev){
+      const keys = testKeys(Np, Math.pow(P,M));
+      let order = Array.from({length:Np},(_,i)=>i);
+      for (let p=0;p<M;p++){
+        let digits = order.map(c => digitOf(keys[c],p,P));
+        if (p === 0){ order = order.slice(0,n); digits = digits.slice(0,n); }
+        order = applyPass(order, digits, P, rev);
+      }
+      return order.join("");
+    }
+
+    // One row: T trials, then chi-square over ALL N! orderings including the
+    // ones never observed.
+    function row(label, N, sample){
       const T = 150000, cnt = new Map();
-      for (let t=0;t<T;t++){ const k = trial(N,P,M,rev); cnt.set(k,(cnt.get(k)||0)+1); }
+      for (let t=0;t<T;t++){ const k = sample(); cnt.set(k,(cnt.get(k)||0)+1); }
       let fact = 1; for (let i=2;i<=N;i++) fact*=i;
       const exp = T/fact;
       let chi = 0, seen = 0;
-      // sum over ALL N! permutations, including any never observed
-      const perms = permutations(N);
-      for (const p of perms){ const o = cnt.get(p)||0; if(o) seen++; chi += (o-exp)*(o-exp)/exp; }
+      for (const p of permutations(N)){ const o = cnt.get(p)||0; if(o) seen++; chi += (o-exp)*(o-exp)/exp; }
       const df = fact-1;
       const ok = chi < df + 4*Math.sqrt(2*df);   // ~4 sigma band
-      html += `<tr><td>N=${N}, P=${P}, M=${M} <span style="color:var(--dim)">`+
-              `${rev?"face-down":"face-up"}</span></td><td>${seen}/${fact}</td>`+
-              `<td>${chi.toFixed(1)}</td><td>${df}</td>`+
-              `<td class="${ok?'ok':'bad'}">${ok?'uniform ✓':'suspicious'}</td></tr>`;
+      return `<tr><td>${label}</td><td>${seen}/${fact}</td>`+
+             `<td>${chi.toFixed(1)}</td><td>${df}</td>`+
+             `<td class="${ok?'ok':'bad'}">${ok?'uniform ✓':'suspicious'}</td></tr>`;
     }
+
+    // M >= 3 face-down cases matter: at M = 2 a missing pile reversal happens to
+    // cancel, so only a third pass can catch it.
+    const cases = [[5,3,2,true],[6,2,3,true],[4,2,3,true],[5,3,3,true],
+                   [5,3,2,false],[6,2,3,false]];
+    const unknownCases = [[4,6,3,2],[5,7,3,2]];
+    const dim = t => `<span style="color:var(--dim)">${t}</span>`;
+
+    let html = "<table><tr><th>case</th><th>outcomes seen</th><th>χ²</th><th>df</th><th></th></tr>";
+    for (const [N,P,M,rev] of cases)
+      html += row(`N=${N}, P=${P}, M=${M} ${dim(rev?"face-down":"face-up")}`,
+                  N, () => trial(N,P,M,rev));
+    for (const [n,Np,P,M] of unknownCases)
+      html += row(`n=${n} of N′=${Np}, P=${P}, M=${M} ${dim("unknown N")}`,
+                  n, () => trialUnknown(n,Np,P,M,true));
+
     out.innerHTML = html + "</table><div class='note'>χ² near df means the observed "+
       "distribution over all N! orderings is consistent with exact uniformity.</div>";
   }, 30);
@@ -725,11 +880,13 @@ function permutations(N){
 $("N").addEventListener("input", refreshPlan);
 $("P").addEventListener("change", ()=>{ userPickedP = true; showPlan(); });
 $("speed").addEventListener("input", showPlan);
+$("unknown").addEventListener("change", showPlan);
 $("start").addEventListener("click", beginShuffle);
 $("play").addEventListener("click", ()=> S.playing ? stop() : play());
 $("step").addEventListener("click", ()=>{ stop(); stepFwd(); });
 $("back").addEventListener("click", stepBack);
 $("next").addEventListener("click", nextPass);
+$("ranOut").addEventListener("click", deckRanOut);
 $("abort").addEventListener("click", ()=>{
   stop(); $("deal").classList.add("hidden"); $("setup").classList.remove("hidden");
 });
